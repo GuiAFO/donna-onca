@@ -46,7 +46,9 @@ function doGet(e) {
       for (var i = 0; i < vals.length; i++) {
         var cod = vals[i][0]
         var desc = vals[i][1]
-        if (cod === '' && desc === '') continue
+        // pula linhas sem Descrição: vazias OU placeholders do template
+        // (a coluna B vem pré-preenchida com números sequenciais)
+        if (desc === '') continue
         produtos.push({
           codigo: cod === '' ? '' : String(cod),
           descricao: desc === '' ? '' : String(desc),
@@ -119,11 +121,14 @@ function doPost(e) {
   }
 }
 
-/** Primeira linha sem Código (coluna B) a partir de START_ROW. */
+/** Primeira linha sem Descrição (coluna C) a partir de START_ROW.
+    A coluna B (Código) deste template vem pré-preenchida com números
+    sequenciais nas linhas não usadas, então a Descrição é o sinal
+    confiável de "linha livre". */
 function _proximaLinhaVazia(sh) {
   var max = sh.getMaxRows()
   var n = max - CONFIG.START_ROW + 1
-  var col = sh.getRange(CONFIG.START_ROW, 2, n, 1).getValues()
+  var col = sh.getRange(CONFIG.START_ROW, 3, n, 1).getValues()
   for (var i = 0; i < col.length; i++) {
     if (col[i][0] === '' || col[i][0] === null) return CONFIG.START_ROW + i
   }
