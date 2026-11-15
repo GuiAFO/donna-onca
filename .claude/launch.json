@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "donna-onca",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "C:\\dev\\donna-onca", "run", "dev", "--", "--port", "5180", "--strictPort"],
+      "port": 5180
+    }
+  ]
+}

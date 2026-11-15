@@ -1,0 +1,60 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: #fbf7f4; /* creme */
+  color: #2e2a28; /* grafite */
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  /* respeita o notch quando aberto em tela cheia (standalone) */
+  padding: env(safe-area-inset-top) env(safe-area-inset-right) env(safe-area-inset-bottom)
+    env(safe-area-inset-left);
+}
+
+/* evita zoom do iOS ao focar inputs (fonte < 16px dispara zoom) */
+input,
+select,
+textarea,
+button {
+  font-size: 16px;
+}
+
+@layer components {
+  .campo {
+    @apply w-full rounded-xl2 border border-rose-soft bg-white px-4 py-3 text-grafite
+      shadow-card outline-none transition focus:border-rose focus:ring-2 focus:ring-rose-soft;
+  }
+  .rotulo {
+    @apply mb-1 block text-sm font-medium text-grafite/70;
+  }
+  .btn-primario {
+    @apply flex w-full items-center justify-center gap-2 rounded-xl2 bg-rose px-5 py-4
+      text-base font-semibold text-white shadow-card transition active:bg-rose-deep
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-secundario {
+    @apply flex items-center justify-center gap-2 rounded-xl2 border border-rose-soft
+      bg-white px-4 py-3 font-medium text-rose-deep transition active:bg-rose-soft/30;
+  }
+  .chip {
+    @apply min-w-[48px] rounded-full border px-4 py-2 text-sm font-semibold transition;
+  }
+  .chip-on {
+    @apply border-rose bg-rose text-white;
+  }
+  .chip-off {
+    @apply border-rose-soft bg-white text-rose-deep active:bg-rose-soft/30;
+  }
+}
