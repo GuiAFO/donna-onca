@@ -13,6 +13,7 @@ export type ProdutoCatalogo = {
   fornecedor: string
   custo: number | null
   venda: number | null
+  cor: string
 }
 
 export type Catalogo = {
@@ -26,6 +27,8 @@ export type LinhaParaSalvar = {
   fornecedor: string
   custo: number | null
   venda: number | null
+  cor: string
+  quantidade: number | null // vai para "Atual" do Estoque do mês
 }
 
 function garantirConfig() {

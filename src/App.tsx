@@ -26,6 +26,8 @@ export default function App() {
   const [fornecedor, setFornecedor] = useState(FORNECEDOR_PADRAO)
   const [custo, setCusto] = useState('')
   const [venda, setVenda] = useState('')
+  const [cor, setCor] = useState('')
+  const [quantidade, setQuantidade] = useState('')
   const [tamanhos, setTamanhos] = useState<string[]>([])
   const [tamanhoExtra, setTamanhoExtra] = useState('')
   const [leituraCrua, setLeituraCrua] = useState<string | null>(null)
@@ -61,6 +63,7 @@ export default function App() {
     if (ult.fornecedor) setFornecedor(ult.fornecedor)
     if (ult.custo != null) setCusto(String(ult.custo).replace('.', ','))
     if (ult.venda != null) setVenda(String(ult.venda).replace('.', ','))
+    if (ult.cor) setCor(ult.cor)
   }
 
   function aoDetectar(code: string) {
@@ -94,17 +97,15 @@ export default function App() {
     const cst = parseValor(custo)
     const vnd = parseValor(venda)
     const fnc = fornecedor.trim()
+    const cr = cor.trim()
+    const digitos = quantidade.replace(/[^\d]/g, '')
+    const qtd = digitos ? parseInt(digitos, 10) : null
+    const comum = { codigo: codigo.trim(), fornecedor: fnc, custo: cst, venda: vnd, cor: cr, quantidade: qtd }
     if (tamanhos.length === 0) {
-      return [{ codigo: codigo.trim(), descricao: base, fornecedor: fnc, custo: cst, venda: vnd }]
+      return [{ ...comum, descricao: base }]
     }
-    return tamanhos.map((t) => ({
-      codigo: codigo.trim(),
-      descricao: `${base} ${t}`.trim(),
-      fornecedor: fnc,
-      custo: cst,
-      venda: vnd,
-    }))
-  }, [codigo, descricaoBase, fornecedor, custo, venda, tamanhos])
+    return tamanhos.map((t) => ({ ...comum, descricao: `${base} ${t}`.trim() }))
+  }, [codigo, descricaoBase, fornecedor, custo, venda, cor, quantidade, tamanhos])
 
   // avisos de duplicado (código + descrição idêntica já existe no catálogo)
   const duplicados = useMemo(
@@ -126,6 +127,8 @@ export default function App() {
     setDescricaoBase('')
     setCusto('')
     setVenda('')
+    setCor('')
+    setQuantidade('')
     setTamanhos([])
     setTamanhoExtra('')
     setLeituraCrua(null)
@@ -153,6 +156,7 @@ export default function App() {
             fornecedor: l.fornecedor,
             custo: l.custo,
             venda: l.venda,
+            cor: l.cor,
           })),
         ],
       }))
@@ -227,6 +231,14 @@ export default function App() {
           value={descricaoBase}
           onChange={setDescricaoBase}
           placeholder="ex.: Tanga Embutida"
+        />
+
+        <CampoVoz
+          label="Cor"
+          value={cor}
+          onChange={setCor}
+          placeholder="ex.: Preta"
+          autoCapitalize="words"
         />
 
         {/* Tamanhos */}
@@ -332,6 +344,24 @@ export default function App() {
             Lucro: {formatBRL((parseValor(venda) ?? 0) - (parseValor(custo) ?? 0))}
           </p>
         )}
+
+        <div>
+          <label className="rotulo" htmlFor="quantidade">
+            Quantidade (estoque)
+          </label>
+          <input
+            id="quantidade"
+            className="campo"
+            value={quantidade}
+            onChange={(e) => setQuantidade(e.target.value)}
+            inputMode="numeric"
+            placeholder="ex.: 3"
+          />
+          <p className="mt-1 text-xs text-grafite/50">
+            Vai para a coluna “Atual” do Estoque do mês
+            {tamanhos.length > 1 ? ' (a mesma quantidade para cada tamanho)' : ''}.
+          </p>
+        </div>
 
         {duplicados.length > 0 && (
           <p className="rounded-xl2 bg-tawny/10 px-3 py-2 text-xs text-tawny">
