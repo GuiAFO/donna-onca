@@ -6,6 +6,8 @@
  *     E=Custo, F=Venda, G=Lucro (fórmula), K=Cor.
  *   - "<Mês> | Estoque": coluna F ("Atual") = Quantidade, na linha que
  *     espelha o produto (Estoque linha = catálogo linha - 1).
+ *   - "<Mês> | Vendas" (fase 2): B:I (Data, Nome, Descrição, Quant., Forma,
+ *     Conta, Status, Valor) + baixa no Estoque (Saídas += qtd, Atual -= qtd).
  *
  * Como publicar:
  *   1. Abra a planilha → menu Extensões → Apps Script.
@@ -24,8 +26,26 @@ var CONFIG = {
   // Estoque (mensal): a linha do Estoque = linha do catálogo + OFFSET
   ESTOQUE_OFFSET: -1,
   ESTOQUE_COL_ATUAL: 6, // coluna F ("Atual")
+  ESTOQUE_COL_SAIDAS: 5, // coluna E ("Saídas")
   ESTOQUE_SUFIXO: ' | Estoque ', // atenção ao espaço final no nome da aba
   MESES: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'],
+  // Vendas (mensal): aba "<Mês> | Vendas" — SEM espaço final (ao contrário do Estoque)
+  VENDAS_SUFIXO: ' | Vendas',
+  VENDAS_START_ROW: 4, // dados começam na linha 4
+  // tabela da esquerda: B=Data, C=Nome, D=Descrição, E=Quant., F=Forma, G=Conta, H=Status, I=Valor
+  VENDAS_COL_FORMA: 6, // F
+  VENDAS_COL_CONTA: 7, // G
+  VENDAS_COL_STATUS: 8, // H
+  // Clientes (para autocomplete na venda)
+  CLIENTES_SHEET: 'Cadastro de Clientes',
+  CLIENTES_COL_NOME: 3, // coluna C
+  CLIENTES_START_ROW: 3,
+  // opções padrão caso a planilha não tenha validação nas colunas da Vendas
+  OPCOES_FALLBACK: {
+    formaRecebimento: ['Pix', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito'],
+    conta: ['Infinite'],
+    status: ['Efetuado', 'Pendente'],
+  },
 }
 
 function _ss() {
@@ -36,6 +56,10 @@ function _sheet() {
 }
 function _abaEstoqueDoMes() {
   var nome = CONFIG.MESES[new Date().getMonth()] + CONFIG.ESTOQUE_SUFIXO
+  return _ss().getSheetByName(nome)
+}
+function _abaVendasDoMes() {
+  var nome = CONFIG.MESES[new Date().getMonth()] + CONFIG.VENDAS_SUFIXO
   return _ss().getSheetByName(nome)
 }
 
@@ -70,6 +94,7 @@ function doGet(e) {
           custo: vals[i][3] === '' ? null : Number(vals[i][3]),
           venda: vals[i][4] === '' ? null : Number(vals[i][4]),
           cor: vals[i][9] === '' ? '' : String(vals[i][9]), // coluna K
+          linha: CONFIG.START_ROW + i, // linha no catálogo (p/ achar o Estoque na venda)
         })
       }
     }
@@ -87,7 +112,43 @@ function doGet(e) {
       }
     }
 
-    return _json({ fornecedores: Object.keys(fornecedores), produtos: produtos })
+    // Clientes (para autocomplete na venda)
+    var clientes = []
+    var cs = _ss().getSheetByName(CONFIG.CLIENTES_SHEET)
+    if (cs && cs.getLastRow() >= CONFIG.CLIENTES_START_ROW) {
+      var cv = cs
+        .getRange(
+          CONFIG.CLIENTES_START_ROW,
+          CONFIG.CLIENTES_COL_NOME,
+          cs.getLastRow() - CONFIG.CLIENTES_START_ROW + 1,
+          1,
+        )
+        .getValues()
+      for (var ci = 0; ci < cv.length; ci++) {
+        if (cv[ci][0] !== '') clientes.push(String(cv[ci][0]))
+      }
+    }
+
+    // Opções dos menus da venda: lê a validação da própria planilha (com fallback)
+    var vsh = _abaVendasDoMes()
+    var opcoes = {
+      formaRecebimento:
+        (vsh && _opcoesValidacao(vsh, CONFIG.VENDAS_START_ROW, CONFIG.VENDAS_COL_FORMA)) ||
+        CONFIG.OPCOES_FALLBACK.formaRecebimento,
+      conta:
+        (vsh && _opcoesValidacao(vsh, CONFIG.VENDAS_START_ROW, CONFIG.VENDAS_COL_CONTA)) ||
+        CONFIG.OPCOES_FALLBACK.conta,
+      status:
+        (vsh && _opcoesValidacao(vsh, CONFIG.VENDAS_START_ROW, CONFIG.VENDAS_COL_STATUS)) ||
+        CONFIG.OPCOES_FALLBACK.status,
+    }
+
+    return _json({
+      fornecedores: Object.keys(fornecedores),
+      produtos: produtos,
+      clientes: clientes,
+      opcoes: opcoes,
+    })
   } catch (err) {
     return _json({ erro: String(err) })
   }
@@ -109,6 +170,12 @@ function doPost(e) {
     if (!body || body.token !== CONFIG.TOKEN) {
       return _json({ ok: false, erro: 'Token inválido.' })
     }
+
+    // Venda rápida (fase 2): grava na aba Vendas do mês e dá baixa no estoque.
+    if (body.tipo === 'venda') {
+      return registrarVenda(body.venda || {})
+    }
+
     var linhas = body.linhas || []
     if (!linhas.length) return _json({ ok: false, erro: 'Nenhuma linha recebida.' })
 
@@ -174,6 +241,117 @@ function _numOuVazio(v) {
   if (v === '' || v === null || v === undefined) return ''
   var n = Number(v)
   return isNaN(n) ? '' : n
+}
+
+/**
+ * Venda rápida: grava uma linha na aba "<Mês> | Vendas" (tabela da esquerda, B:I)
+ * e dá baixa no Estoque do mês (Saídas += qtd, Atual -= qtd) na linha espelhada.
+ * v = { data, nome, descricao, quantidade, forma, conta, status, valor, linhaCatalogo }
+ */
+function registrarVenda(v) {
+  var vsh = _abaVendasDoMes()
+  if (!vsh) return _json({ ok: false, erro: 'Aba de vendas do mês não encontrada.' })
+
+  var r = _proximaLinhaVendaVazia(vsh)
+  var qtd = _numOuVazio(v.quantidade)
+  if (qtd === '' || qtd === 0) qtd = 1
+  var valor = _numOuVazio(v.valor)
+  var status = String(v.status || 'Efetuado')
+
+  // B:I = Data, Nome, Descrição, Quant., Forma de recebimento, Conta, Status, Valor
+  vsh.getRange(r, 2, 1, 8).setValues([
+    [
+      _parseData(v.data),
+      String(v.nome || ''),
+      String(v.descricao || ''),
+      qtd,
+      String(v.forma || ''),
+      String(v.conta || ''),
+      status,
+      valor,
+    ],
+  ])
+  if (valor !== '') vsh.getRange(r, 9).setNumberFormat(CONFIG.FORMATO_MOEDA)
+
+  // Baixa de estoque (linha espelhada = linha do catálogo + OFFSET)
+  var estoqueInfo = null
+  if (v.linhaCatalogo) {
+    var estoque = _abaEstoqueDoMes()
+    if (estoque) {
+      var er = Number(v.linhaCatalogo) + CONFIG.ESTOQUE_OFFSET
+      var saidasCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_SAIDAS)
+      var atualCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_ATUAL)
+      var saidas = Number(saidasCell.getValue()) || 0
+      var atual = Number(atualCell.getValue()) || 0
+      saidasCell.setValue(saidas + qtd)
+      atualCell.setValue(atual - qtd)
+      estoqueInfo = { linha: er, saidas: saidas + qtd, atual: atual - qtd }
+    }
+  }
+
+  SpreadsheetApp.flush()
+  return _json({ ok: true, linhaVenda: r, estoque: estoqueInfo })
+}
+
+/** Primeira linha livre da aba de Vendas (coluna B = Data), a partir de VENDAS_START_ROW. */
+function _proximaLinhaVendaVazia(sh) {
+  var max = sh.getMaxRows()
+  var n = max - CONFIG.VENDAS_START_ROW + 1
+  var col = sh.getRange(CONFIG.VENDAS_START_ROW, 2, n, 1).getValues()
+  for (var i = 0; i < col.length; i++) {
+    if (col[i][0] === '' || col[i][0] === null) return CONFIG.VENDAS_START_ROW + i
+  }
+  return max + 1
+}
+
+/** Converte 'YYYY-MM-DD' em Date; sem data válida, usa hoje. */
+function _parseData(s) {
+  if (s && /^\d{4}-\d{2}-\d{2}$/.test(String(s))) {
+    var p = String(s).split('-')
+    return new Date(Number(p[0]), Number(p[1]) - 1, Number(p[2]))
+  }
+  return new Date()
+}
+
+/** Lê as opções de uma lista de validação (ou null se não houver). */
+function _opcoesValidacao(sh, row, col) {
+  try {
+    var dv = sh.getRange(row, col).getDataValidation()
+    if (!dv) return null
+    var vals = dv.getCriteriaValues()
+    if (!vals || !vals.length) return null
+    var v0 = vals[0]
+    if (Object.prototype.toString.call(v0) === '[object Array]') {
+      return v0.map(String).filter(function (s) {
+        return s !== ''
+      })
+    }
+    if (v0 && typeof v0.getValues === 'function') {
+      var out = []
+      var rows = v0.getValues()
+      for (var i = 0; i < rows.length; i++) {
+        if (rows[i][0] !== '') out.push(String(rows[i][0]))
+      }
+      return out.length ? out : null
+    }
+  } catch (e) {}
+  return null
+}
+
+/** Teste manual de venda no editor (não afeta o app). linhaCatalogo:0 não mexe no estoque. */
+function _testeVenda() {
+  var out = registrarVenda({
+    data: '',
+    nome: 'TESTE (apagar)',
+    descricao: 'Tanga Embutida',
+    quantidade: 1,
+    forma: 'Pix',
+    conta: 'Infinite',
+    status: 'Efetuado',
+    valor: 20,
+    linhaCatalogo: 0,
+  })
+  Logger.log(out.getContent())
 }
 
 /** Teste manual no editor do Apps Script (não afeta o app). */

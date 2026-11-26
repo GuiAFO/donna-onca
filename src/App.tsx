@@ -11,13 +11,20 @@ import {
   type ProdutoCatalogo,
 } from './lib/api'
 import { TAMANHOS_PADRAO, parseValor, stripTamanho, formatBRL } from './lib/format'
+import TelaVenda from './components/TelaVenda'
 
 const FORNECEDOR_PADRAO = 'Valentina Moda Intima'
 
 export default function App() {
-  const [catalogo, setCatalogo] = useState<Catalogo>({ fornecedores: [], produtos: [] })
+  const [catalogo, setCatalogo] = useState<Catalogo>({
+    fornecedores: [],
+    produtos: [],
+    clientes: [],
+    opcoes: { formaRecebimento: [], conta: [], status: ['Efetuado', 'Pendente'] },
+  })
   const [erroCatalogo, setErroCatalogo] = useState<string | null>(null)
 
+  const [aba, setAba] = useState<'cadastrar' | 'vender'>('cadastrar')
   const [scannerAberto, setScannerAberto] = useState(false)
 
   // campos do formulário
@@ -147,7 +154,7 @@ export default function App() {
       const r = await salvarProdutos(linhas)
       // atualiza o catálogo local para sugestões/duplicados seguirem corretos
       setCatalogo((c) => ({
-        fornecedores: c.fornecedores,
+        ...c,
         produtos: [
           ...c.produtos,
           ...linhas.map((l) => ({
@@ -157,6 +164,7 @@ export default function App() {
             custo: l.custo,
             venda: l.venda,
             cor: l.cor,
+            linha: 0,
           })),
         ],
       }))
@@ -192,6 +200,32 @@ export default function App() {
         </p>
       )}
 
+      {/* Alternância Cadastrar | Vender */}
+      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl2 bg-white p-1 shadow-card">
+        <button
+          type="button"
+          onClick={() => setAba('cadastrar')}
+          className={`rounded-xl2 py-2 text-sm font-medium transition ${
+            aba === 'cadastrar' ? 'bg-rose text-white' : 'text-grafite/60'
+          }`}
+        >
+          Cadastrar
+        </button>
+        <button
+          type="button"
+          onClick={() => setAba('vender')}
+          className={`rounded-xl2 py-2 text-sm font-medium transition ${
+            aba === 'vender' ? 'bg-rose text-white' : 'text-grafite/60'
+          }`}
+        >
+          Vender
+        </button>
+      </div>
+
+      {aba === 'vender' && <TelaVenda catalogo={catalogo} />}
+
+      {aba === 'cadastrar' && (
+        <>
       {/* Botão escanear */}
       <button onClick={() => setScannerAberto(true)} className="btn-primario mb-3">
         <span className="text-xl">📷</span> Escanear código de barras
@@ -410,6 +444,8 @@ export default function App() {
         >
           <Scanner onDetect={aoDetectar} onClose={() => setScannerAberto(false)} />
         </Suspense>
+      )}
+        </>
       )}
     </div>
   )
