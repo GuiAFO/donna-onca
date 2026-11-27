@@ -105,6 +105,10 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
     [codigo, catalogo],
   )
 
+  // Catálogo sem "linha" = o Apps Script publicado ainda é a versão antiga (só cadastro).
+  const servidorDesatualizado =
+    catalogo.produtos.length > 0 && catalogo.produtos[0].linha == null
+
   const pecas = itens.reduce((s, it) => s + it.quantidade, 0)
   const total = itens.reduce((s, it) => s + (totalItem(it) ?? 0), 0)
   const semPreco = itens.some((it) => totalItem(it) == null)
@@ -215,7 +219,8 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
 
   // ---------- registrar ----------
 
-  const podeRegistrar = itens.length > 0 && !semPreco && nome.trim() !== '' && !salvando
+  const podeRegistrar =
+    itens.length > 0 && !semPreco && nome.trim() !== '' && !salvando && !servidorDesatualizado
 
   async function aoRegistrar() {
     setErro(null)
@@ -253,6 +258,13 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
 
   return (
     <div className="pb-24">
+      {servidorDesatualizado && (
+        <p className="mb-3 rounded-xl2 bg-rose/10 px-4 py-3 text-sm text-rose-deep">
+          O servidor (Apps Script) ainda está na versão antiga, então as vendas não podem
+          ser registradas. Publique a versão nova em Implantar → Gerenciar implantações.
+        </p>
+      )}
+
       <button onClick={() => setScannerAberto(true)} className="btn-primario mb-3">
         <span className="text-xl">📷</span> Escanear produto
       </button>
