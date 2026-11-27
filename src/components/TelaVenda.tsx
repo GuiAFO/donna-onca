@@ -112,8 +112,10 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
   // ---------- carrinho ----------
 
   function adicionarAoCarrinho(desc: string, precoUnit: string, linha: number | null) {
-    const d = desc.trim()
-    if (!d) return
+    // Do catálogo: texto EXATO (até espaço no fim), porque a fórmula de Saídas do
+    // Estoque casa a venda pela Descrição. Digitado à mão: pode aparar.
+    const d = linha != null ? desc : desc.trim()
+    if (!d.trim()) return
     setItens((atual) => {
       // mesmo produto de novo → só soma a quantidade
       const i = atual.findIndex((it) =>

@@ -26,7 +26,7 @@ var CONFIG = {
   // Estoque (mensal): a linha do Estoque = linha do catálogo + OFFSET
   ESTOQUE_OFFSET: -1,
   ESTOQUE_COL_ATUAL: 6, // coluna F ("Atual")
-  ESTOQUE_COL_SAIDAS: 5, // coluna E ("Saídas")
+  ESTOQUE_COL_SAIDAS: 5, // coluna E ("Saídas") — fórmula dela; só leitura
   ESTOQUE_SUFIXO: ' | Estoque ', // atenção ao espaço final no nome da aba
   MESES: ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'],
   // Vendas (mensal): aba "<Mês> | Vendas" — SEM espaço final (ao contrário do Estoque)
@@ -277,20 +277,11 @@ function registrarVenda(v) {
   ])
   if (valor !== '') vsh.getRange(r, 9).setNumberFormat(CONFIG.FORMATO_MOEDA)
 
-  // Baixa de estoque (linha espelhada = linha do catálogo + OFFSET)
+  // Baixa de estoque: só no "Atual" digitado à mão (ver _baixarAtualDigitado)
   var estoqueInfo = null
   if (v.linhaCatalogo) {
     var estoque = _abaEstoqueDoMes()
-    if (estoque) {
-      var er = Number(v.linhaCatalogo) + CONFIG.ESTOQUE_OFFSET
-      var saidasCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_SAIDAS)
-      var atualCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_ATUAL)
-      var saidas = Number(saidasCell.getValue()) || 0
-      var atual = Number(atualCell.getValue()) || 0
-      saidasCell.setValue(saidas + qtd)
-      atualCell.setValue(atual - qtd)
-      estoqueInfo = { linha: er, saidas: saidas + qtd, atual: atual - qtd }
-    }
+    if (estoque) estoqueInfo = _baixarAtualDigitado(estoque, Number(v.linhaCatalogo), qtd)
   }
 
   SpreadsheetApp.flush()
@@ -336,25 +327,34 @@ function registrarCarrinho(v) {
   vsh.getRange(r, 2, linhas.length, 8).setValues(linhas)
   vsh.getRange(r, 9, linhas.length, 1).setNumberFormat(CONFIG.FORMATO_MOEDA)
 
-  // Baixa de estoque (linha espelhada = linha do catálogo + OFFSET)
+  // Baixa de estoque: só no "Atual" digitado à mão (ver _baixarAtualDigitado)
   var estoqueInfo = []
   var estoque = _abaEstoqueDoMes()
   if (estoque) {
     for (var key in baixas) {
-      var er = Number(key) + CONFIG.ESTOQUE_OFFSET
-      var q = baixas[key]
-      var saidasCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_SAIDAS)
-      var atualCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_ATUAL)
-      var saidas = Number(saidasCell.getValue()) || 0
-      var atual = Number(atualCell.getValue()) || 0
-      saidasCell.setValue(saidas + q)
-      atualCell.setValue(atual - q)
-      estoqueInfo.push({ linha: er, saidas: saidas + q, atual: atual - q })
+      var info = _baixarAtualDigitado(estoque, Number(key), baixas[key])
+      if (info) estoqueInfo.push(info)
     }
   }
 
   SpreadsheetApp.flush()
   return _json({ ok: true, primeiraLinha: r, linhas: linhas.length, estoque: estoqueInfo })
+}
+
+/**
+ * A aba Estoque já dá baixa sozinha: "Saídas" é fórmula que soma as vendas
+ * do mês pela Descrição, e "Atual" é fórmula (mês anterior + Entradas − Saídas).
+ * Por isso NUNCA escrevemos em Saídas. A única exceção é quando ela digitou a
+ * contagem por cima da fórmula do "Atual": aí o número não se mexe sozinho e
+ * descontamos a quantidade vendida. Se for fórmula, não tocamos.
+ */
+function _baixarAtualDigitado(estoque, linhaCatalogo, qtd) {
+  var er = linhaCatalogo + CONFIG.ESTOQUE_OFFSET
+  var atualCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_ATUAL)
+  if (atualCell.getFormula() !== '') return { linha: er, atual: 'fórmula' }
+  var atual = Number(atualCell.getValue()) || 0
+  atualCell.setValue(atual - qtd)
+  return { linha: er, atual: atual - qtd }
 }
 
 /** Primeira linha a partir da qual há n linhas livres seguidas (coluna B = Data). */
