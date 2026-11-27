@@ -12,6 +12,7 @@ import {
 } from './lib/api'
 import { TAMANHOS_PADRAO, parseValor, stripTamanho, formatBRL } from './lib/format'
 import TelaVenda from './components/TelaVenda'
+import TelaReceber from './components/TelaReceber'
 
 const FORNECEDOR_PADRAO = 'Valentina Moda Intima'
 
@@ -25,7 +26,7 @@ export default function App() {
   const [erroCatalogo, setErroCatalogo] = useState<string | null>(null)
   const [carregandoCatalogo, setCarregandoCatalogo] = useState(true)
 
-  const [aba, setAba] = useState<'cadastrar' | 'vender'>('cadastrar')
+  const [aba, setAba] = useState<'cadastrar' | 'vender' | 'receber'>('cadastrar')
   const [scannerAberto, setScannerAberto] = useState(false)
 
   // campos do formulário
@@ -218,27 +219,29 @@ export default function App() {
         </div>
       )}
 
-      {/* Alternância Cadastrar | Vender */}
-      <div className="mb-4 grid grid-cols-2 gap-1 rounded-xl2 bg-white p-1 shadow-card">
-        <button
-          type="button"
-          onClick={() => setAba('cadastrar')}
-          className={`rounded-xl2 py-2 text-sm font-medium transition ${
-            aba === 'cadastrar' ? 'bg-rose text-white' : 'text-grafite/60'
-          }`}
-        >
-          Cadastrar
-        </button>
-        <button
-          type="button"
-          onClick={() => setAba('vender')}
-          className={`rounded-xl2 py-2 text-sm font-medium transition ${
-            aba === 'vender' ? 'bg-rose text-white' : 'text-grafite/60'
-          }`}
-        >
-          Vender
-        </button>
+      {/* Alternância Cadastrar | Vender | Receber */}
+      <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl2 bg-white p-1 shadow-card">
+        {(
+          [
+            ['cadastrar', 'Cadastrar'],
+            ['vender', 'Vender'],
+            ['receber', 'Receber'],
+          ] as const
+        ).map(([id, rotulo]) => (
+          <button
+            key={id}
+            type="button"
+            onClick={() => setAba(id)}
+            className={`rounded-xl2 py-2 text-sm font-medium transition ${
+              aba === id ? 'bg-rose text-white' : 'text-grafite/60'
+            }`}
+          >
+            {rotulo}
+          </button>
+        ))}
       </div>
+
+      {aba === 'receber' && <TelaReceber catalogo={catalogo} />}
 
       {aba === 'vender' && (
         <TelaVenda

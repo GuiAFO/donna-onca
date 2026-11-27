@@ -1,6 +1,20 @@
 // Cálculo das parcelas do fiado (puro, sem tela).
 import type { ParcelaFiado } from './api'
 
+/** Hoje como 'YYYY-MM-DD' no fuso do aparelho. */
+export function hojeISO(): string {
+  const d = new Date()
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const dd = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${mm}-${dd}`
+}
+
+/** '2026-12-27' -> '27/12/2026' */
+export function dataLonga(iso: string): string {
+  const [a, m, d] = iso.split('-')
+  return `${d}/${m}/${a}`
+}
+
 /** Soma k meses a uma data 'YYYY-MM-DD'. Dia 31 em mês curto vira o último dia. */
 export function somarMeses(iso: string, k: number): string {
   const [a, m, d] = iso.split('-').map(Number)

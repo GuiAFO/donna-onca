@@ -13,6 +13,8 @@
  *     automaticamente (a coluna Nome da Vendas só aceita nomes de lá).
  *   - Fiado: produtos em S:V da Vendas do mês, parcelas em K:Q da Vendas do
  *     mês de cada vencimento, e a cliente na coluna B da aba "Fiados".
+ *   - Receber parcela (v4): muda N:P da parcela (Status, Forma, Conta) de
+ *     "Pendente" para "Efetuado". GET ?acao=parcelas lista as pendentes.
  *
  * Como publicar:
  *   1. Abra a planilha → menu Extensões → Apps Script.
@@ -22,7 +24,7 @@
  */
 
 var CONFIG = {
-  VERSAO: 3, // 3 = fiado. O app confere isto antes de mostrar o Fiado.
+  VERSAO: 4, // 3 = fiado, 4 = receber parcelas. O app confere antes de mostrar o Fiado.
   SHEET_ID: '1WVhGYfsI2qRgKVqv1PdzR6JakV04nYRQ1tv8IzXGYmw',
   SHEET_NAME: 'Cadastro de Produtos',
   START_ROW: 4, // dados começam na linha 4
@@ -44,6 +46,7 @@ var CONFIG = {
   VENDAS_COL_STATUS: 8, // H
   // Fiado (na mesma aba "<Mês> | Vendas")
   FIADO_COL_PARCELAS: 11, // K: K=Data(vencimento) L=Nome M=Parcela N=Status O=Forma P=Conta Q=Valor
+  FIADO_COL_STATUS: 14, // N (Status da parcela); O = Forma, P = Conta logo ao lado
   FIADO_COL_SAIDAS: 19, // S: S=Data T=Nome U=Qnt. V=Descrição (saída de estoque do fiado)
   FIADOS_SHEET: 'Fiados', // painel por cliente; nomes na coluna B
   FIADOS_START_ROW: 7,
@@ -85,6 +88,9 @@ function doGet(e) {
   try {
     var token = e && e.parameter ? e.parameter.token : ''
     if (token !== CONFIG.TOKEN) return _json({ erro: 'Token inválido.' })
+
+    // Tela "Receber": só as parcelas pendentes (lê as 12 abas de Vendas)
+    if (e.parameter.acao === 'parcelas') return _json(_listarParcelas())
 
     var sh = _sheet()
     var ultima = sh.getLastRow()
@@ -190,6 +196,10 @@ function doPost(e) {
     // Carrinho (fase 2.1): vários itens na mesma venda, gravados num bloco só.
     if (body.tipo === 'vendaCarrinho') {
       return registrarCarrinho(body.venda || {})
+    }
+    // Receber parcelas do fiado (v4): Pendente → Efetuado + Forma + Conta.
+    if (body.tipo === 'receberParcelas') {
+      return receberParcelas(body)
     }
 
     var linhas = body.linhas || []
@@ -476,7 +486,7 @@ function _registrarFiado(vsh, data, cliente, itens, plano, forma, conta) {
       abas.push({ aba: nomeA, primeiraLinha: rk, parcelas: lin.length })
     }
 
-    // ---- cliente na aba "Fiados" (lá a lista é digitada à mão) ----
+    // ---- cliente na aba "Fiados" (rede de segurança; ver _garantirClienteNosFiados) ----
     var fiadosInfo = _garantirClienteNosFiados(cliente.nome)
 
     // ---- baixa de estoque: igual à venda à vista ----
@@ -544,7 +554,121 @@ function _conferirParcelas(lista, itens) {
   return { parcelas: out }
 }
 
-/** Inclui a cliente na coluna B da aba "Fiados" (a partir da linha 7), se faltar. */
+/**
+ * Lista as parcelas "Pendente" de K:Q nas 12 abas "<Mês> | Vendas".
+ * A coluna M (Parcela) guarda "1/2" como data com formato d/m, então o
+ * rótulo vem do texto exibido (getDisplayValues), não do valor.
+ */
+function _listarParcelas() {
+  var ss = _ss()
+  var fuso = ss.getSpreadsheetTimeZone()
+  var out = []
+  for (var m = 0; m < 12; m++) {
+    var nomeAba = CONFIG.MESES[m] + CONFIG.VENDAS_SUFIXO
+    var sh = ss.getSheetByName(nomeAba)
+    if (!sh) continue
+    var ultima = sh.getLastRow()
+    if (ultima < CONFIG.VENDAS_START_ROW) continue
+    var n = ultima - CONFIG.VENDAS_START_ROW + 1
+    var rg = sh.getRange(CONFIG.VENDAS_START_ROW, CONFIG.FIADO_COL_PARCELAS, n, 7)
+    var vals = rg.getValues()
+    var disp = rg.getDisplayValues()
+    for (var i = 0; i < n; i++) {
+      var r = vals[i] // K=venc, L=nome, M=parcela, N=status, O=forma, P=conta, Q=valor
+      if (r[1] === '' || String(r[3]) !== 'Pendente') continue
+      out.push({
+        aba: nomeAba,
+        linha: CONFIG.VENDAS_START_ROW + i,
+        vencimento:
+          Object.prototype.toString.call(r[0]) === '[object Date]'
+            ? Utilities.formatDate(r[0], fuso, 'yyyy-MM-dd')
+            : '',
+        nome: String(r[1]),
+        parcela: disp[i][2],
+        valor: Number(r[6]) || 0,
+      })
+    }
+  }
+  out.sort(function (a, b) {
+    return a.vencimento < b.vencimento ? -1 : a.vencimento > b.vencimento ? 1 : 0
+  })
+  return { ok: true, versao: CONFIG.VERSAO, parcelas: out }
+}
+
+/**
+ * Recebe parcelas: N:P = Efetuado, Forma, Conta.
+ * b = { forma, conta, parcelas: [{ aba, linha, nome, valor }] }
+ * Antes de gravar, confere que cada linha ainda é a mesma parcela pendente
+ * (mesmo nome e valor), para não marcar a linha errada se a planilha mudou.
+ */
+function receberParcelas(b) {
+  var itens = b.parcelas || []
+  if (!itens.length) return _json({ ok: false, erro: 'Nenhuma parcela escolhida.' })
+  if (!String(b.forma || '').trim()) {
+    return _json({ ok: false, erro: 'Escolha a forma de recebimento.' })
+  }
+  var abasValidas = CONFIG.MESES.map(function (m) {
+    return m + CONFIG.VENDAS_SUFIXO
+  })
+
+  // ---- 1) conferir tudo ----
+  var alvos = []
+  var total = 0
+  for (var i = 0; i < itens.length; i++) {
+    var it = itens[i] || {}
+    var nomeAba = String(it.aba || '')
+    if (abasValidas.indexOf(nomeAba) < 0) return _json({ ok: false, erro: 'Aba inválida: ' + nomeAba })
+    var sh = _ss().getSheetByName(nomeAba)
+    var linha = Number(it.linha)
+    if (!sh || !(linha >= CONFIG.VENDAS_START_ROW)) {
+      return _json({ ok: false, erro: 'Parcela não encontrada em ' + nomeAba + '.' })
+    }
+    var row = sh.getRange(linha, CONFIG.FIADO_COL_PARCELAS, 1, 7).getValues()[0]
+    var rotulo = String(it.nome || '') + ' (' + nomeAba + ', linha ' + linha + ')'
+    if (String(row[1]) !== String(it.nome) || Math.abs(Number(row[6]) - Number(it.valor)) > 0.005) {
+      return _json({
+        ok: false,
+        erro: 'A parcela de ' + rotulo + ' mudou na planilha. Atualize a lista e tente de novo.',
+      })
+    }
+    if (String(row[3]) !== 'Pendente') {
+      return _json({
+        ok: false,
+        erro: 'A parcela de ' + rotulo + ' já está como "' + row[3] + '". Atualize a lista.',
+      })
+    }
+    var forma = _conferirOpcao(sh, CONFIG.FIADO_COL_STATUS + 1, b.forma, 'Forma de recebimento')
+    var conta = _conferirOpcao(sh, CONFIG.FIADO_COL_STATUS + 2, b.conta, 'Conta')
+    if (forma.erro || conta.erro) return _json({ ok: false, erro: forma.erro || conta.erro })
+    alvos.push({ sh: sh, linha: linha, forma: forma.valor, conta: conta.valor })
+    total += Number(row[6]) || 0
+  }
+
+  // ---- 2) gravar; se a planilha recusar no meio, devolve o que já mudou ----
+  var antigos = []
+  try {
+    for (var j = 0; j < alvos.length; j++) {
+      var a = alvos[j]
+      var cel = a.sh.getRange(a.linha, CONFIG.FIADO_COL_STATUS, 1, 3)
+      antigos.push({ cel: cel, vals: cel.getValues() })
+      cel.setValues([['Efetuado', a.forma, a.conta]])
+    }
+  } catch (err) {
+    for (var g = 0; g < antigos.length; g++) {
+      try {
+        antigos[g].cel.setValues(antigos[g].vals)
+      } catch (ignore) {}
+    }
+    return _json({ ok: false, erro: 'A planilha recusou o recebimento: ' + String(err) })
+  }
+
+  SpreadsheetApp.flush()
+  return _json({ ok: true, recebidas: alvos.length, total: Math.round(total * 100) / 100 })
+}
+
+/** Inclui a cliente na coluna B da aba "Fiados" (a partir da linha 7), se faltar.
+    Normalmente a coluna B é fórmula espelhando o Cadastro de Clientes, e a
+    cliente já aparece sozinha; aqui é só uma rede de segurança. */
 function _garantirClienteNosFiados(nome) {
   var fs = _ss().getSheetByName(CONFIG.FIADOS_SHEET)
   if (!fs) return null

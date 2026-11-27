@@ -68,6 +68,19 @@ export type ParcelaFiado = {
   paga: boolean // true = entrada paga na hora (Status "Efetuado")
 }
 
+/** Uma parcela "Pendente" lida de K:Q de alguma aba "<Mês> | Vendas". */
+export type ParcelaPendente = {
+  aba: string // ex.: 'Dez | Vendas'
+  linha: number // linha da parcela nessa aba
+  vencimento: string // 'YYYY-MM-DD' ('' se a célula não tiver data)
+  nome: string
+  parcela: string // rótulo como aparece na planilha, ex.: '2/3'
+  valor: number
+}
+
+const MSG_SERVIDOR_ANTIGO =
+  'O servidor ainda não sabe receber parcelas — atualize o Apps Script (versão 4).'
+
 const OPCOES_PADRAO: OpcoesVenda = {
   formaRecebimento: ['Pix', 'Dinheiro', 'Cartão de débito', 'Cartão de crédito'],
   conta: [],
@@ -168,4 +181,50 @@ export async function salvarVenda(
     fiado: data.fiado,
     parcelas: data.parcelas,
   }
+}
+
+/** Lista as parcelas pendentes de todas as abas de Vendas (mais antigas primeiro). */
+export async function listParcelas(): Promise<ParcelaPendente[]> {
+  garantirConfig()
+  const url = `${APPS_SCRIPT_URL}?token=${encodeURIComponent(APP_TOKEN)}&acao=parcelas`
+  const resp = await fetch(url, { method: 'GET' })
+  if (!resp.ok) throw new Error(`Falha ao ler parcelas (HTTP ${resp.status}).`)
+  const data = (await resp.json()) as { parcelas?: ParcelaPendente[]; erro?: string }
+  if (data.erro) throw new Error(data.erro)
+  // servidor antigo ignora "acao" e devolve o catálogo (sem "parcelas")
+  if (!Array.isArray(data.parcelas)) throw new Error(MSG_SERVIDOR_ANTIGO)
+  return data.parcelas
+}
+
+/** Marca as parcelas como recebidas: Status "Efetuado" + Forma + Conta. */
+export async function receberParcelas(
+  parcelas: ParcelaPendente[],
+  forma: string,
+  conta: string,
+): Promise<{ recebidas: number; total: number }> {
+  garantirConfig()
+  const resp = await fetch(APPS_SCRIPT_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body: JSON.stringify({
+      token: APP_TOKEN,
+      tipo: 'receberParcelas',
+      forma,
+      conta,
+      parcelas: parcelas.map(({ aba, linha, nome, valor }) => ({ aba, linha, nome, valor })),
+    }),
+  })
+  if (!resp.ok) throw new Error(`Falha ao receber (HTTP ${resp.status}).`)
+  const data = (await resp.json()) as {
+    ok?: boolean
+    recebidas?: number
+    total?: number
+    erro?: string
+  }
+  if (!data.ok) {
+    // servidor antigo cai no ramo do cadastro de produtos e não grava nada
+    if (data.erro === 'Nenhuma linha recebida.') throw new Error(MSG_SERVIDOR_ANTIGO)
+    throw new Error(data.erro ?? 'Não foi possível registrar o recebimento.')
+  }
+  return { recebidas: data.recebidas ?? parcelas.length, total: data.total ?? 0 }
 }

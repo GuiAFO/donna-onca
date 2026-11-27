@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { interpretarLeitura } from '../lib/barcode'
 import { parseValor, formatBRL } from '../lib/format'
 import { salvarVenda, type Catalogo, type ProdutoCatalogo, type Venda } from '../lib/api'
-import { dataCurta, montarParcelas, somarMeses } from '../lib/fiado'
+import { dataCurta, hojeISO, montarParcelas, somarMeses } from '../lib/fiado'
 
 // Mesmo Scanner do cadastro, carregado sob demanda.
 const Scanner = lazy(() => import('./Scanner'))
@@ -17,13 +17,6 @@ type ItemCarrinho = {
 }
 
 const CHAVE_RASCUNHO = 'donna-onca:carrinho'
-
-function hojeISO() {
-  const d = new Date()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${d.getFullYear()}-${mm}-${dd}`
-}
 
 // número -> string "21,50" para o campo editável
 function paraCampo(n: number) {
