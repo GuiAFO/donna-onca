@@ -32,6 +32,8 @@ export default function TelaReceber({ catalogo }: { catalogo: Catalogo }) {
   function carregar() {
     setCarregando(true)
     setErroLista(null)
+    setSucesso(null)
+    setErro(null)
     listParcelas()
       .then((ps) => {
         setParcelas(ps)
