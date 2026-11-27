@@ -25,6 +25,7 @@ export type OpcoesVenda = {
 }
 
 export type Catalogo = {
+  versao?: number // versão do Apps Script (3+ = sabe gravar fiado)
   fornecedores: string[]
   produtos: ProdutoCatalogo[]
   clientes: string[]
@@ -90,6 +91,7 @@ export async function listProdutos(): Promise<Catalogo> {
   const data = (await resp.json()) as Partial<Catalogo> & { erro?: string }
   if (data.erro) throw new Error(data.erro)
   return {
+    versao: data.versao,
     fornecedores: data.fornecedores ?? [],
     produtos: data.produtos ?? [],
     clientes: data.clientes ?? [],

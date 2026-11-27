@@ -22,6 +22,7 @@
  */
 
 var CONFIG = {
+  VERSAO: 3, // 3 = fiado. O app confere isto antes de mostrar o Fiado.
   SHEET_ID: '1WVhGYfsI2qRgKVqv1PdzR6JakV04nYRQ1tv8IzXGYmw',
   SHEET_NAME: 'Cadastro de Produtos',
   START_ROW: 4, // dados começam na linha 4
@@ -154,6 +155,7 @@ function doGet(e) {
     }
 
     return _json({
+      versao: CONFIG.VERSAO, // o app só libera recursos novos se o servidor tiver
       fornecedores: Object.keys(fornecedores),
       produtos: produtos,
       clientes: clientes,

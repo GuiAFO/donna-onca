@@ -136,7 +136,9 @@ export default function TelaVenda({
   }, [nome, catalogo])
   const clienteNova = nome.trim() !== '' && clienteDaLista == null
 
-  const fiado = modo === 'fiado'
+  // servidor antigo ignoraria as parcelas e gravaria como à vista
+  const servidorSabeFiado = (catalogo.versao ?? 0) >= 3
+  const fiado = modo === 'fiado' && servidorSabeFiado
   const comEntrada = fiado && entrada && nParcelas > 1
   const parcelas = useMemo(
     () => (fiado ? montarParcelas(total, nParcelas, primeiroVenc, data, comEntrada) : []),
@@ -248,6 +250,7 @@ export default function TelaVenda({
     !semPreco &&
     !foraDoCatalogo &&
     (!fiado || primeiroVenc !== '') &&
+    !(modo === 'fiado' && !servidorSabeFiado) && // nunca cai em "à vista" por engano
     nome.trim() !== '' &&
     !salvando &&
     !servidorDesatualizado
@@ -530,6 +533,12 @@ export default function TelaVenda({
             </button>
           ))}
         </div>
+        {modo === 'fiado' && !servidorSabeFiado && (
+          <p className="rounded-xl2 bg-rose/10 px-3 py-2 text-sm text-rose-deep">
+            O servidor (Apps Script) ainda não sabe gravar fiado. Publique a versão nova em
+            Implantar → Gerenciar implantações. Até lá, só venda à vista.
+          </p>
+        )}
 
         <div>
           <label className="rotulo" htmlFor="venda-cliente">
