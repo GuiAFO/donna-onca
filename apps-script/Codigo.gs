@@ -175,6 +175,10 @@ function doPost(e) {
     if (body.tipo === 'venda') {
       return registrarVenda(body.venda || {})
     }
+    // Carrinho (fase 2.1): vários itens na mesma venda, gravados num bloco só.
+    if (body.tipo === 'vendaCarrinho') {
+      return registrarCarrinho(body.venda || {})
+    }
 
     var linhas = body.linhas || []
     if (!linhas.length) return _json({ ok: false, erro: 'Nenhuma linha recebida.' })
@@ -291,6 +295,84 @@ function registrarVenda(v) {
 
   SpreadsheetApp.flush()
   return _json({ ok: true, linhaVenda: r, estoque: estoqueInfo })
+}
+
+/**
+ * Carrinho: grava todos os itens de uma venda em linhas seguidas da aba
+ * "<Mês> | Vendas" (B:I) e dá baixa no Estoque de cada produto do catálogo.
+ * v = { data, nome, forma, conta, status,
+ *       itens: [{ descricao, quantidade, valor, linhaCatalogo }] }
+ */
+function registrarCarrinho(v) {
+  var itens = v.itens || []
+  if (!itens.length) return _json({ ok: false, erro: 'Carrinho vazio.' })
+
+  var vsh = _abaVendasDoMes()
+  if (!vsh) return _json({ ok: false, erro: 'Aba de vendas do mês não encontrada.' })
+
+  var data = _parseData(v.data)
+  var nome = String(v.nome || '')
+  var forma = String(v.forma || '')
+  var conta = String(v.conta || '')
+  var status = String(v.status || 'Efetuado')
+
+  var linhas = []
+  var baixas = {} // linhaCatalogo -> qtd total (o mesmo produto pode aparecer 2x)
+  for (var i = 0; i < itens.length; i++) {
+    var it = itens[i]
+    var qtd = _numOuVazio(it.quantidade)
+    if (qtd === '' || qtd === 0) qtd = 1
+    linhas.push([data, nome, String(it.descricao || ''), qtd, forma, conta, status, _numOuVazio(it.valor)])
+    if (it.linhaCatalogo) {
+      var k = String(Number(it.linhaCatalogo))
+      baixas[k] = (baixas[k] || 0) + qtd
+    }
+  }
+
+  // B:I de uma vez, num bloco de linhas livres seguidas
+  var r = _proximoBlocoVendaVazio(vsh, linhas.length)
+  var falta = r + linhas.length - 1 - vsh.getMaxRows()
+  if (falta > 0) vsh.insertRowsAfter(vsh.getMaxRows(), falta)
+  vsh.getRange(r, 2, linhas.length, 8).setValues(linhas)
+  vsh.getRange(r, 9, linhas.length, 1).setNumberFormat(CONFIG.FORMATO_MOEDA)
+
+  // Baixa de estoque (linha espelhada = linha do catálogo + OFFSET)
+  var estoqueInfo = []
+  var estoque = _abaEstoqueDoMes()
+  if (estoque) {
+    for (var key in baixas) {
+      var er = Number(key) + CONFIG.ESTOQUE_OFFSET
+      var q = baixas[key]
+      var saidasCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_SAIDAS)
+      var atualCell = estoque.getRange(er, CONFIG.ESTOQUE_COL_ATUAL)
+      var saidas = Number(saidasCell.getValue()) || 0
+      var atual = Number(atualCell.getValue()) || 0
+      saidasCell.setValue(saidas + q)
+      atualCell.setValue(atual - q)
+      estoqueInfo.push({ linha: er, saidas: saidas + q, atual: atual - q })
+    }
+  }
+
+  SpreadsheetApp.flush()
+  return _json({ ok: true, primeiraLinha: r, linhas: linhas.length, estoque: estoqueInfo })
+}
+
+/** Primeira linha a partir da qual há n linhas livres seguidas (coluna B = Data). */
+function _proximoBlocoVendaVazio(sh, n) {
+  var max = sh.getMaxRows()
+  var total = max - CONFIG.VENDAS_START_ROW + 1
+  var col = sh.getRange(CONFIG.VENDAS_START_ROW, 2, total, 1).getValues()
+  var seguidas = 0
+  for (var i = 0; i < col.length; i++) {
+    if (col[i][0] === '' || col[i][0] === null) {
+      seguidas++
+      if (seguidas === n) return CONFIG.VENDAS_START_ROW + i - n + 1
+    } else {
+      seguidas = 0
+    }
+  }
+  // sem bloco livre suficiente: começa no fim (quem chama cria as linhas que faltarem)
+  return CONFIG.VENDAS_START_ROW + col.length - seguidas
 }
 
 /** Primeira linha livre da aba de Vendas (coluna B = Data), a partir de VENDAS_START_ROW. */

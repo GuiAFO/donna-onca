@@ -41,17 +41,22 @@ export type LinhaParaSalvar = {
   quantidade: number | null // vai para "Atual" do Estoque do mês
 }
 
-/** Uma venda a registrar na aba "<Mês> | Vendas". */
+/** Um item do carrinho → vira uma linha na aba "<Mês> | Vendas". */
+export type ItemVenda = {
+  descricao: string // produto (ex.: "Tanga Embutida M")
+  quantidade: number
+  valor: number | null // total da linha (preço unitário × quantidade)
+  linhaCatalogo: number | null // linha do produto no catálogo → baixa no Estoque
+}
+
+/** Uma venda (carrinho) a registrar: dados comuns + itens. */
 export type Venda = {
   data: string // 'YYYY-MM-DD'
   nome: string // cliente (da lista ou avulsa)
-  descricao: string // produto (ex.: "Tanga Embutida M")
-  quantidade: number
   forma: string // forma de recebimento
   conta: string
-  status: string // 'Efetuado' no v2
-  valor: number | null
-  linhaCatalogo: number | null // linha do produto no catálogo → baixa no Estoque
+  status: string // 'Efetuado' por enquanto
+  itens: ItemVenda[]
 }
 
 const OPCOES_PADRAO: OpcoesVenda = {
@@ -105,25 +110,32 @@ export async function salvarProdutos(
 }
 
 /**
- * Registra uma venda na aba "<Mês> | Vendas" e dá baixa no Estoque do mês.
+ * Registra a venda inteira (todos os itens do carrinho) numa chamada só:
+ * uma linha por item na aba "<Mês> | Vendas" + baixa no Estoque do mês.
  * Usa text/plain pelo mesmo motivo de salvarProdutos (evita o preflight).
  */
 export async function salvarVenda(
   venda: Venda,
-): Promise<{ ok: boolean; linhaVenda?: number; estoque?: { atual: number } | null }> {
+): Promise<{ ok: boolean; primeiraLinha?: number; linhas?: number }> {
   garantirConfig()
   const resp = await fetch(APPS_SCRIPT_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body: JSON.stringify({ token: APP_TOKEN, tipo: 'venda', venda }),
+    body: JSON.stringify({ token: APP_TOKEN, tipo: 'vendaCarrinho', venda }),
   })
   if (!resp.ok) throw new Error(`Falha ao registrar venda (HTTP ${resp.status}).`)
   const data = (await resp.json()) as {
     ok?: boolean
-    linhaVenda?: number
-    estoque?: { atual: number } | null
+    primeiraLinha?: number
+    linhas?: number
     erro?: string
   }
-  if (!data.ok) throw new Error(data.erro ?? 'Não foi possível registrar a venda.')
-  return { ok: true, linhaVenda: data.linhaVenda, estoque: data.estoque ?? null }
+  if (!data.ok) {
+    // Script antigo (sem carrinho) cai no ramo do cadastro e não grava nada.
+    if (data.erro === 'Nenhuma linha recebida.') {
+      throw new Error('O servidor ainda não conhece o carrinho — atualize o Apps Script.')
+    }
+    throw new Error(data.erro ?? 'Não foi possível registrar a venda.')
+  }
+  return { ok: true, primeiraLinha: data.primeiraLinha, linhas: data.linhas }
 }
