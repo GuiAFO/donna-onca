@@ -11,6 +11,8 @@
  *     descontamos o "Atual" quando ele foi digitado à mão.
  *   - "Cadastro de Clientes" (coluna C): cliente nova da venda é cadastrada
  *     automaticamente (a coluna Nome da Vendas só aceita nomes de lá).
+ *   - Fiado: produtos em S:V da Vendas do mês, parcelas em K:Q da Vendas do
+ *     mês de cada vencimento, e a cliente na coluna B da aba "Fiados".
  *
  * Como publicar:
  *   1. Abra a planilha → menu Extensões → Apps Script.
@@ -39,6 +41,11 @@ var CONFIG = {
   VENDAS_COL_FORMA: 6, // F
   VENDAS_COL_CONTA: 7, // G
   VENDAS_COL_STATUS: 8, // H
+  // Fiado (na mesma aba "<Mês> | Vendas")
+  FIADO_COL_PARCELAS: 11, // K: K=Data(vencimento) L=Nome M=Parcela N=Status O=Forma P=Conta Q=Valor
+  FIADO_COL_SAIDAS: 19, // S: S=Data T=Nome U=Qnt. V=Descrição (saída de estoque do fiado)
+  FIADOS_SHEET: 'Fiados', // painel por cliente; nomes na coluna B
+  FIADOS_START_ROW: 7,
   // Clientes (para autocomplete na venda)
   CLIENTES_SHEET: 'Cadastro de Clientes',
   CLIENTES_COL_NOME: 3, // coluna C
@@ -332,8 +339,19 @@ function registrarCarrinho(v) {
     return _json({ ok: false, erro: forma.erro || conta.erro || status.erro })
   }
 
+  // Fiado: confere as parcelas também antes de gravar qualquer coisa
+  var plano = null
+  if (v.fiado) {
+    plano = _conferirParcelas(v.fiado.parcelas, itens)
+    if (plano.erro) return _json({ ok: false, erro: plano.erro })
+  }
+
   // ---- 2) Cliente: usa a da lista ou cadastra a nova ----
   var cliente = _acharOuCadastrarCliente(nome)
+
+  if (plano) {
+    return _registrarFiado(vsh, data, cliente, itens, plano, forma.valor, conta.valor)
+  }
 
   var linhas = []
   var baixas = {} // linhaCatalogo -> qtd total (o mesmo produto pode aparecer 2x)
@@ -390,6 +408,181 @@ function registrarCarrinho(v) {
     cliente: cliente.nome,
     clienteNova: cliente.nova,
   })
+}
+
+/**
+ * Venda FIADA — usa as duas tabelas que a planilha já tem para isso:
+ *   - "Saídas do estoque | Fiado" (S:V = Data, Nome, Qnt., Descrição) na aba do
+ *     mês da venda. A fórmula de Saídas do Estoque já soma essa tabela (U/V).
+ *   - "Cadastro de parcelas fiado" (K:Q = Data, Nome, Parcela, Status, Forma,
+ *     Conta, Valor) na aba do MÊS DO VENCIMENTO de cada parcela. A coluna K
+ *     guarda o vencimento (o "Valor em atraso" do painel usa K < hoje).
+ * Não grava na tabela B:I — senão a receita e a saída de estoque contariam 2x.
+ */
+function _registrarFiado(vsh, data, cliente, itens, plano, forma, conta) {
+  var gravados = [] // ranges já escritos, para desfazer se algo falhar
+
+  try {
+    // ---- produtos → S:V da aba do mês ----
+    var prod = []
+    var baixas = {}
+    for (var i = 0; i < itens.length; i++) {
+      var it = itens[i]
+      var qtd = _numOuVazio(it.quantidade)
+      if (qtd === '' || qtd === 0) qtd = 1
+      prod.push([data, cliente.nome, qtd, it.descricao])
+      if (it.linhaCatalogo) {
+        var k = String(Number(it.linhaCatalogo))
+        baixas[k] = (baixas[k] || 0) + qtd
+      }
+    }
+    var rp = _proximoBlocoVazio(vsh, CONFIG.FIADO_COL_SAIDAS, prod.length)
+    _garantirLinhas(vsh, rp + prod.length - 1)
+    var blocoProd = vsh.getRange(rp, CONFIG.FIADO_COL_SAIDAS, prod.length, 4)
+    gravados.push(blocoProd)
+    blocoProd.setValues(prod)
+
+    // ---- parcelas → K:Q da aba do mês do vencimento ----
+    var n = plano.parcelas.length
+    var porAba = {} // nome da aba -> [linhas]
+    for (var p = 0; p < n; p++) {
+      var pc = plano.parcelas[p]
+      var nomeAba = CONFIG.MESES[pc.vencimento.getMonth()] + CONFIG.VENDAS_SUFIXO
+      if (!porAba[nomeAba]) porAba[nomeAba] = []
+      porAba[nomeAba].push([
+        pc.vencimento,
+        cliente.nome,
+        p + 1 + '/' + n, // a coluna tem formato "d/m": "2/3" aparece como 2/3
+        pc.paga ? 'Efetuado' : 'Pendente',
+        pc.paga ? forma : '', // forma/conta só quando já foi paga (entrada)
+        pc.paga ? conta : '',
+        pc.valor,
+      ])
+    }
+    var abas = []
+    for (var nomeA in porAba) {
+      var sh = _ss().getSheetByName(nomeA)
+      var lin = porAba[nomeA]
+      var rk = _proximoBlocoVazio(sh, CONFIG.FIADO_COL_PARCELAS, lin.length)
+      _garantirLinhas(sh, rk + lin.length - 1)
+      var blocoParc = sh.getRange(rk, CONFIG.FIADO_COL_PARCELAS, lin.length, 7)
+      gravados.push(blocoParc)
+      blocoParc.setValues(lin)
+      sh.getRange(rk, CONFIG.FIADO_COL_PARCELAS + 6, lin.length, 1).setNumberFormat(
+        CONFIG.FORMATO_MOEDA,
+      )
+      abas.push({ aba: nomeA, primeiraLinha: rk, parcelas: lin.length })
+    }
+
+    // ---- cliente na aba "Fiados" (lá a lista é digitada à mão) ----
+    var fiadosInfo = _garantirClienteNosFiados(cliente.nome)
+
+    // ---- baixa de estoque: igual à venda à vista ----
+    var estoqueInfo = []
+    var estoque = _abaEstoqueDoMes()
+    if (estoque) {
+      for (var key in baixas) {
+        var info = _baixarAtualDigitado(estoque, Number(key), baixas[key])
+        if (info) estoqueInfo.push(info)
+      }
+    }
+
+    SpreadsheetApp.flush()
+    return _json({
+      ok: true,
+      fiado: true,
+      primeiraLinha: rp,
+      linhas: prod.length,
+      parcelas: n,
+      abas: abas,
+      fiados: fiadosInfo,
+      estoque: estoqueInfo,
+      cliente: cliente.nome,
+      clienteNova: cliente.nova,
+    })
+  } catch (err) {
+    // desfaz o que já foi escrito (só valores; mantém validação e formato)
+    for (var g = 0; g < gravados.length; g++) {
+      try {
+        gravados[g].clearContent()
+      } catch (ignore) {}
+    }
+    return _json({ ok: false, erro: 'A planilha recusou o fiado: ' + String(err) })
+  }
+}
+
+/**
+ * Confere o plano de parcelas: datas válidas, valores > 0, aba do mês existe
+ * e a soma bate com o total do carrinho. Devolve { parcelas } ou { erro }.
+ */
+function _conferirParcelas(lista, itens) {
+  lista = lista || []
+  if (!lista.length) return { erro: 'Fiado sem parcelas.' }
+  if (lista.length > 12) return { erro: 'No máximo 12 parcelas.' }
+  var total = 0
+  for (var i = 0; i < itens.length; i++) total += Number(_numOuVazio(itens[i].valor)) || 0
+  var soma = 0
+  var out = []
+  for (var p = 0; p < lista.length; p++) {
+    var pc = lista[p]
+    if (!pc || !/^\d{4}-\d{2}-\d{2}$/.test(String(pc.vencimento))) {
+      return { erro: 'Parcela ' + (p + 1) + ' sem data de vencimento.' }
+    }
+    var valor = Number(_numOuVazio(pc.valor))
+    if (!(valor > 0)) return { erro: 'Parcela ' + (p + 1) + ' sem valor.' }
+    var venc = _parseData(pc.vencimento)
+    var aba = CONFIG.MESES[venc.getMonth()] + CONFIG.VENDAS_SUFIXO
+    if (!_ss().getSheetByName(aba)) return { erro: 'Aba "' + aba + '" não encontrada.' }
+    soma += valor
+    out.push({ vencimento: venc, valor: Math.round(valor * 100) / 100, paga: !!pc.paga })
+  }
+  if (Math.abs(soma - total) > 0.01) {
+    return { erro: 'A soma das parcelas não bate com o total da venda.' }
+  }
+  return { parcelas: out }
+}
+
+/** Inclui a cliente na coluna B da aba "Fiados" (a partir da linha 7), se faltar. */
+function _garantirClienteNosFiados(nome) {
+  var fs = _ss().getSheetByName(CONFIG.FIADOS_SHEET)
+  if (!fs) return null
+  var max = fs.getMaxRows()
+  var col = fs.getRange(CONFIG.FIADOS_START_ROW, 2, max - CONFIG.FIADOS_START_ROW + 1, 1).getValues()
+  var livre = -1
+  for (var i = 0; i < col.length; i++) {
+    var v = col[i][0]
+    if (v === '' || v === null) {
+      if (livre < 0) livre = CONFIG.FIADOS_START_ROW + i
+    } else if (String(v) === nome) {
+      return { linha: CONFIG.FIADOS_START_ROW + i, nova: false }
+    }
+  }
+  if (livre < 0) return null // lista cheia: não mexe (as fórmulas vão até a 1002)
+  fs.getRange(livre, 2).setValue(nome)
+  return { linha: livre, nova: true }
+}
+
+/** Primeira linha (a partir da 4) com n células vazias seguidas na coluna col. */
+function _proximoBlocoVazio(sh, col, n) {
+  var max = sh.getMaxRows()
+  var total = max - CONFIG.VENDAS_START_ROW + 1
+  var vals = sh.getRange(CONFIG.VENDAS_START_ROW, col, total, 1).getValues()
+  var seguidas = 0
+  for (var i = 0; i < vals.length; i++) {
+    if (vals[i][0] === '' || vals[i][0] === null) {
+      seguidas++
+      if (seguidas === n) return CONFIG.VENDAS_START_ROW + i - n + 1
+    } else {
+      seguidas = 0
+    }
+  }
+  return CONFIG.VENDAS_START_ROW + vals.length - seguidas
+}
+
+/** Cria linhas no fim da aba se ultimaLinha passar do tamanho atual. */
+function _garantirLinhas(sh, ultimaLinha) {
+  var falta = ultimaLinha - sh.getMaxRows()
+  if (falta > 0) sh.insertRowsAfter(sh.getMaxRows(), falta)
 }
 
 /** Descrições do catálogo (coluna C), exatamente como estão na planilha. */

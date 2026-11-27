@@ -57,6 +57,14 @@ export type Venda = {
   conta: string
   status: string // 'Efetuado' por enquanto
   itens: ItemVenda[]
+  fiado?: { parcelas: ParcelaFiado[] } // presente = venda fiada
+}
+
+/** Uma parcela do fiado → uma linha em K:Q da aba do mês do vencimento. */
+export type ParcelaFiado = {
+  vencimento: string // 'YYYY-MM-DD'
+  valor: number
+  paga: boolean // true = entrada paga na hora (Status "Efetuado")
 }
 
 const OPCOES_PADRAO: OpcoesVenda = {
@@ -122,6 +130,8 @@ export async function salvarVenda(
   linhas?: number
   cliente?: string
   clienteNova?: boolean
+  fiado?: boolean
+  parcelas?: number
 }> {
   garantirConfig()
   const resp = await fetch(APPS_SCRIPT_URL, {
@@ -136,6 +146,8 @@ export async function salvarVenda(
     linhas?: number
     cliente?: string
     clienteNova?: boolean
+    fiado?: boolean
+    parcelas?: number
     erro?: string
   }
   if (!data.ok) {
@@ -151,5 +163,7 @@ export async function salvarVenda(
     linhas: data.linhas,
     cliente: data.cliente,
     clienteNova: data.clienteNova,
+    fiado: data.fiado,
+    parcelas: data.parcelas,
   }
 }

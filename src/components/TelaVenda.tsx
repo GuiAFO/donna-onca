@@ -2,6 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { interpretarLeitura } from '../lib/barcode'
 import { parseValor, formatBRL } from '../lib/format'
 import { salvarVenda, type Catalogo, type ProdutoCatalogo, type Venda } from '../lib/api'
+import { dataCurta, montarParcelas, somarMeses } from '../lib/fiado'
 
 // Mesmo Scanner do cadastro, carregado sob demanda.
 const Scanner = lazy(() => import('./Scanner'))
@@ -73,6 +74,12 @@ export default function TelaVenda({
   const [conta, setConta] = useState('')
   const [data, setData] = useState(hojeISO())
 
+  // fiado
+  const [modo, setModo] = useState<'avista' | 'fiado'>('avista')
+  const [nParcelas, setNParcelas] = useState(2)
+  const [primeiroVenc, setPrimeiroVenc] = useState(() => somarMeses(hojeISO(), 1))
+  const [entrada, setEntrada] = useState(false)
+
   const [scannerAberto, setScannerAberto] = useState(false)
   const [leituraCrua, setLeituraCrua] = useState<string | null>(null)
   const [salvando, setSalvando] = useState(false)
@@ -128,6 +135,15 @@ export default function TelaVenda({
     return n ? (catalogo.clientes.find((c) => c.trim().toLowerCase() === n) ?? null) : null
   }, [nome, catalogo])
   const clienteNova = nome.trim() !== '' && clienteDaLista == null
+
+  const fiado = modo === 'fiado'
+  const comEntrada = fiado && entrada && nParcelas > 1
+  const parcelas = useMemo(
+    () => (fiado ? montarParcelas(total, nParcelas, primeiroVenc, data, comEntrada) : []),
+    [fiado, total, nParcelas, primeiroVenc, data, comEntrada],
+  )
+  // forma/conta só valem para o que é pago agora: à vista ou a entrada do fiado
+  const pedeFormaConta = !fiado || comEntrada
 
   // ---------- carrinho ----------
 
@@ -231,6 +247,7 @@ export default function TelaVenda({
     itens.length > 0 &&
     !semPreco &&
     !foraDoCatalogo &&
+    (!fiado || primeiroVenc !== '') &&
     nome.trim() !== '' &&
     !salvando &&
     !servidorDesatualizado
@@ -247,8 +264,8 @@ export default function TelaVenda({
       const venda: Venda = {
         data,
         nome: clienteDaLista ?? nome.trim(), // nome exato da lista, quando já existe
-        forma,
-        conta,
+        forma: pedeFormaConta ? forma : '',
+        conta: pedeFormaConta ? conta : '',
         status: 'Efetuado',
         itens: itens.map((it) => ({
           descricao: it.descricao,
@@ -256,15 +273,21 @@ export default function TelaVenda({
           valor: totalItem(it),
           linhaCatalogo: it.linhaCatalogo,
         })),
+        ...(fiado ? { fiado: { parcelas } } : {}),
       }
       const r = await salvarVenda(venda)
       if (r.clienteNova && r.cliente) onClienteNova?.(r.cliente)
+      const pc = `${pecas} ${pecas === 1 ? 'peça' : 'peças'} · ${formatBRL(total)}`
       setSucesso(
-        `Venda registrada! ${pecas} ${pecas === 1 ? 'peça' : 'peças'} · ${formatBRL(total)} ✨` +
+        (fiado
+          ? `Fiado registrado! ${pc} em ${nParcelas}x ✨`
+          : `Venda registrada! ${pc} ✨`) +
           (r.clienteNova ? ` ${r.cliente} foi cadastrada como cliente.` : ''),
       )
       setItens([])
       setNome('')
+      setModo('avista')
+      setEntrada(false)
     } catch (e) {
       setErro((e as Error).message)
     } finally {
@@ -491,6 +514,23 @@ export default function TelaVenda({
 
       {/* ---------- Dados da venda ---------- */}
       <div className="mt-4 space-y-4 rounded-xl2 bg-white p-4 shadow-card">
+        {/* À vista | Fiado */}
+        <div className="grid grid-cols-2 gap-1 rounded-xl2 bg-creme p-1">
+          {(['avista', 'fiado'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setModo(m)}
+              aria-pressed={modo === m}
+              className={`rounded-xl2 py-2 text-sm font-medium transition ${
+                modo === m ? 'bg-rose text-white' : 'text-grafite/60'
+              }`}
+            >
+              {m === 'avista' ? 'À vista' : 'Fiado'}
+            </button>
+          ))}
+        </div>
+
         <div>
           <label className="rotulo" htmlFor="venda-cliente">
             Cliente
@@ -516,10 +556,86 @@ export default function TelaVenda({
           )}
         </div>
 
+        {fiado && (
+          <div className="space-y-3 rounded-xl2 border border-rose-soft/60 p-3">
+            <div className="flex items-center justify-between">
+              <span className="rotulo mb-0">Parcelas</span>
+              <div className="flex items-center rounded-full border border-rose-soft">
+                <button
+                  type="button"
+                  onClick={() => setNParcelas((n) => Math.max(1, n - 1))}
+                  disabled={nParcelas <= 1}
+                  aria-label="Menos parcelas"
+                  className="flex h-11 w-11 items-center justify-center text-xl text-rose-deep disabled:text-grafite/20"
+                >
+                  −
+                </button>
+                <span className="w-8 text-center font-semibold">{nParcelas}x</span>
+                <button
+                  type="button"
+                  onClick={() => setNParcelas((n) => Math.min(12, n + 1))}
+                  disabled={nParcelas >= 12}
+                  aria-label="Mais parcelas"
+                  className="flex h-11 w-11 items-center justify-center text-xl text-rose-deep disabled:text-grafite/20"
+                >
+                  +
+                </button>
+              </div>
+            </div>
+
+            {nParcelas > 1 && (
+              <label className="flex min-h-[44px] items-center gap-3 text-sm text-grafite">
+                <input
+                  type="checkbox"
+                  checked={entrada}
+                  onChange={(e) => setEntrada(e.target.checked)}
+                  className="h-5 w-5 accent-rose"
+                />
+                1ª parcela paga hoje (entrada)
+              </label>
+            )}
+
+            <div>
+              <label className="rotulo" htmlFor="venda-venc">
+                {comEntrada ? 'Vencimento da 2ª parcela' : 'Vencimento da 1ª parcela'}
+              </label>
+              <input
+                id="venda-venc"
+                type="date"
+                className="campo"
+                value={primeiroVenc}
+                onChange={(e) => setPrimeiroVenc(e.target.value)}
+              />
+              <p className="mt-1 text-xs text-grafite/50">As outras vencem no mesmo dia dos meses seguintes.</p>
+            </div>
+
+            {itens.length > 0 && primeiroVenc && (
+              <ul className="divide-y divide-rose-soft/40 text-sm">
+                {parcelas.map((p, i) => (
+                  <li key={i} className="flex items-center justify-between py-2">
+                    <span className="text-grafite/70">
+                      {i + 1}/{nParcelas} · {dataCurta(p.vencimento)}
+                    </span>
+                    <span className="flex items-center gap-2">
+                      {p.paga && (
+                        <span className="rounded-full bg-rose-soft/50 px-2 py-0.5 text-xs text-rose-deep">
+                          paga hoje
+                        </span>
+                      )}
+                      <span className="font-semibold text-grafite">{formatBRL(p.valor)}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+
+        {pedeFormaConta && (
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="rotulo" htmlFor="venda-forma">
-              Forma de recebimento
+              {fiado ? 'Forma da entrada' : 'Forma de recebimento'}
             </label>
             <select
               id="venda-forma"
@@ -553,6 +669,7 @@ export default function TelaVenda({
             </select>
           </div>
         </div>
+        )}
 
         <div>
           <label className="rotulo" htmlFor="venda-data">
@@ -583,9 +700,9 @@ export default function TelaVenda({
           <button onClick={aoRegistrar} disabled={!podeRegistrar} className="btn-primario">
             {salvando
               ? 'Registrando…'
-              : itens.length
-                ? `Registrar venda · ${formatBRL(total)}`
-                : 'Registrar venda'}
+              : `${fiado ? 'Registrar fiado' : 'Registrar venda'}${
+                  itens.length ? ` · ${formatBRL(total)}` : ''
+                }`}
           </button>
         </div>
       </div>
