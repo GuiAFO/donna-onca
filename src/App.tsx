@@ -23,6 +23,7 @@ export default function App() {
     opcoes: { formaRecebimento: [], conta: [], status: ['Efetuado', 'Pendente'] },
   })
   const [erroCatalogo, setErroCatalogo] = useState<string | null>(null)
+  const [carregandoCatalogo, setCarregandoCatalogo] = useState(true)
 
   const [aba, setAba] = useState<'cadastrar' | 'vender'>('cadastrar')
   const [scannerAberto, setScannerAberto] = useState(false)
@@ -44,11 +45,16 @@ export default function App() {
   const [erroSalvar, setErroSalvar] = useState<string | null>(null)
 
   // carrega o catálogo (fornecedores + sugestão de preço); tolera falha
-  useEffect(() => {
+  // (a 1ª chamada depois de publicar o Apps Script pode levar 10s ou mais)
+  function carregarCatalogo() {
+    setCarregandoCatalogo(true)
+    setErroCatalogo(null)
     listProdutos()
       .then(setCatalogo)
       .catch((e: Error) => setErroCatalogo(e.message))
-  }, [])
+      .finally(() => setCarregandoCatalogo(false))
+  }
+  useEffect(carregarCatalogo, [])
 
   const fornecedores = useMemo(() => {
     const s = new Set<string>([FORNECEDOR_PADRAO, ...catalogo.fornecedores])
@@ -194,10 +200,22 @@ export default function App() {
         </div>
       </header>
 
-      {erroCatalogo && (
-        <p className="mb-4 rounded-xl2 bg-tawny/10 px-4 py-3 text-sm text-tawny">
-          Catálogo não carregou (autocomplete e sugestões ficam limitados): {erroCatalogo}
+      {carregandoCatalogo && (
+        <p
+          role="status"
+          className="mb-4 flex items-center gap-2 rounded-xl2 bg-rose-soft/30 px-4 py-3 text-sm text-rose-deep"
+        >
+          <span className="h-3 w-3 shrink-0 animate-spin rounded-full border-2 border-rose-deep/30 border-t-rose-deep" />
+          Carregando catálogo… às vezes leva alguns segundos.
         </p>
+      )}
+      {erroCatalogo && (
+        <div className="mb-4 rounded-xl2 bg-tawny/10 px-4 py-3 text-sm text-tawny">
+          <p>Catálogo não carregou (autocomplete e sugestões ficam limitados): {erroCatalogo}</p>
+          <button onClick={carregarCatalogo} className="mt-2 font-semibold underline">
+            Tentar de novo
+          </button>
+        </div>
       )}
 
       {/* Alternância Cadastrar | Vender */}
