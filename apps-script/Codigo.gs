@@ -7,7 +7,10 @@
  *   - "<Mês> | Estoque": coluna F ("Atual") = Quantidade, na linha que
  *     espelha o produto (Estoque linha = catálogo linha - 1).
  *   - "<Mês> | Vendas" (fase 2): B:I (Data, Nome, Descrição, Quant., Forma,
- *     Conta, Status, Valor) + baixa no Estoque (Saídas += qtd, Atual -= qtd).
+ *     Conta, Status, Valor). Saídas do Estoque é fórmula e soma sozinha; só
+ *     descontamos o "Atual" quando ele foi digitado à mão.
+ *   - "Cadastro de Clientes" (coluna C): cliente nova da venda é cadastrada
+ *     automaticamente (a coluna Nome da Vendas só aceita nomes de lá).
  *
  * Como publicar:
  *   1. Abra a planilha → menu Extensões → Apps Script.
@@ -302,10 +305,35 @@ function registrarCarrinho(v) {
   if (!vsh) return _json({ ok: false, erro: 'Aba de vendas do mês não encontrada.' })
 
   var data = _parseData(v.data)
-  var nome = String(v.nome || '')
-  var forma = String(v.forma || '')
-  var conta = String(v.conta || '')
-  var status = String(v.status || 'Efetuado')
+  var nome = String(v.nome || '').trim()
+  if (!nome) return _json({ ok: false, erro: 'Preencha o nome da cliente.' })
+
+  // ---- 1) Conferir TUDO antes de gravar qualquer coisa ----
+  // As colunas da Vendas têm validação estrita: um valor fora da lista faz o
+  // setValues parar no meio (gravando só parte da linha). Por isso conferimos
+  // aqui e usamos sempre o texto EXATO que a planilha aceita.
+  var catalogo = _descricoesCatalogo()
+  var foraDoCatalogo = []
+  for (var c = 0; c < itens.length; c++) {
+    var exata = _acharNaLista(catalogo, itens[c].descricao)
+    if (exata === null) foraDoCatalogo.push(String(itens[c].descricao || '(sem nome)'))
+    else itens[c].descricao = exata
+  }
+  if (foraDoCatalogo.length) {
+    return _json({
+      ok: false,
+      erro: 'Produto fora do catálogo: ' + foraDoCatalogo.join(', ') + '. Cadastre antes de vender.',
+    })
+  }
+  var forma = _conferirOpcao(vsh, CONFIG.VENDAS_COL_FORMA, v.forma, 'Forma de recebimento')
+  var conta = _conferirOpcao(vsh, CONFIG.VENDAS_COL_CONTA, v.conta, 'Conta')
+  var status = _conferirOpcao(vsh, CONFIG.VENDAS_COL_STATUS, v.status || 'Efetuado', 'Status')
+  if (forma.erro || conta.erro || status.erro) {
+    return _json({ ok: false, erro: forma.erro || conta.erro || status.erro })
+  }
+
+  // ---- 2) Cliente: usa a da lista ou cadastra a nova ----
+  var cliente = _acharOuCadastrarCliente(nome)
 
   var linhas = []
   var baixas = {} // linhaCatalogo -> qtd total (o mesmo produto pode aparecer 2x)
@@ -313,18 +341,34 @@ function registrarCarrinho(v) {
     var it = itens[i]
     var qtd = _numOuVazio(it.quantidade)
     if (qtd === '' || qtd === 0) qtd = 1
-    linhas.push([data, nome, String(it.descricao || ''), qtd, forma, conta, status, _numOuVazio(it.valor)])
+    linhas.push([
+      data,
+      cliente.nome,
+      it.descricao,
+      qtd,
+      forma.valor,
+      conta.valor,
+      status.valor,
+      _numOuVazio(it.valor),
+    ])
     if (it.linhaCatalogo) {
       var k = String(Number(it.linhaCatalogo))
       baixas[k] = (baixas[k] || 0) + qtd
     }
   }
 
-  // B:I de uma vez, num bloco de linhas livres seguidas
+  // ---- 3) B:I de uma vez, num bloco de linhas livres seguidas ----
   var r = _proximoBlocoVendaVazio(vsh, linhas.length)
   var falta = r + linhas.length - 1 - vsh.getMaxRows()
   if (falta > 0) vsh.insertRowsAfter(vsh.getMaxRows(), falta)
-  vsh.getRange(r, 2, linhas.length, 8).setValues(linhas)
+  var bloco = vsh.getRange(r, 2, linhas.length, 8)
+  try {
+    bloco.setValues(linhas)
+  } catch (errGravar) {
+    // não deixa linha pela metade: limpa só os valores (mantém validação/formato)
+    bloco.clearContent()
+    return _json({ ok: false, erro: 'A planilha recusou a venda: ' + String(errGravar) })
+  }
   vsh.getRange(r, 9, linhas.length, 1).setNumberFormat(CONFIG.FORMATO_MOEDA)
 
   // Baixa de estoque: só no "Atual" digitado à mão (ver _baixarAtualDigitado)
@@ -338,7 +382,85 @@ function registrarCarrinho(v) {
   }
 
   SpreadsheetApp.flush()
-  return _json({ ok: true, primeiraLinha: r, linhas: linhas.length, estoque: estoqueInfo })
+  return _json({
+    ok: true,
+    primeiraLinha: r,
+    linhas: linhas.length,
+    estoque: estoqueInfo,
+    cliente: cliente.nome,
+    clienteNova: cliente.nova,
+  })
+}
+
+/** Descrições do catálogo (coluna C), exatamente como estão na planilha. */
+function _descricoesCatalogo() {
+  var sh = _sheet()
+  var ultima = sh.getLastRow()
+  if (ultima < CONFIG.START_ROW) return []
+  var col = sh.getRange(CONFIG.START_ROW, 3, ultima - CONFIG.START_ROW + 1, 1).getValues()
+  var out = []
+  for (var i = 0; i < col.length; i++) if (col[i][0] !== '') out.push(String(col[i][0]))
+  return out
+}
+
+/**
+ * Procura s na lista: primeiro o texto exato; se não achar, ignora
+ * maiúsculas e espaços nas pontas. Devolve o texto EXATO da lista (ou null).
+ */
+function _acharNaLista(lista, s) {
+  var alvo = String(s === null || s === undefined ? '' : s)
+  for (var i = 0; i < lista.length; i++) if (lista[i] === alvo) return lista[i]
+  var norm = alvo.trim().toLowerCase()
+  if (!norm) return null
+  for (var j = 0; j < lista.length; j++) {
+    if (String(lista[j]).trim().toLowerCase() === norm) return lista[j]
+  }
+  return null
+}
+
+/** Confere um valor contra a lista de validação da coluna (se houver). Vazio passa. */
+function _conferirOpcao(vsh, col, valor, rotulo) {
+  var v = String(valor === null || valor === undefined ? '' : valor)
+  if (v === '') return { valor: '' }
+  var lista = _opcoesValidacao(vsh, CONFIG.VENDAS_START_ROW, col)
+  if (!lista) return { valor: v }
+  var exata = _acharNaLista(lista, v)
+  if (exata === null) return { erro: rotulo + ' "' + v + '" não está na lista da planilha.' }
+  return { valor: exata }
+}
+
+/**
+ * A coluna Nome da Vendas só aceita clientes do "Cadastro de Clientes".
+ * Se a cliente já existe, devolve o nome EXATO de lá (até espaço no fim);
+ * se não, grava o nome na primeira linha com Nome vazio (o COD já vem pronto).
+ */
+function _acharOuCadastrarCliente(nome) {
+  var cs = _ss().getSheetByName(CONFIG.CLIENTES_SHEET)
+  if (!cs) throw new Error('Aba "' + CONFIG.CLIENTES_SHEET + '" não encontrada.')
+  var max = cs.getMaxRows()
+  var col = cs
+    .getRange(CONFIG.CLIENTES_START_ROW, CONFIG.CLIENTES_COL_NOME, max - CONFIG.CLIENTES_START_ROW + 1, 1)
+    .getValues()
+
+  var existentes = []
+  var livre = -1
+  for (var i = 0; i < col.length; i++) {
+    if (col[i][0] === '' || col[i][0] === null) {
+      if (livre < 0) livre = CONFIG.CLIENTES_START_ROW + i
+    } else {
+      existentes.push(String(col[i][0]))
+    }
+  }
+  var achada = _acharNaLista(existentes, nome)
+  if (achada !== null) return { nome: achada, nova: false }
+
+  if (livre < 0) {
+    cs.insertRowsAfter(max, 1)
+    livre = max + 1
+  }
+  cs.getRange(livre, CONFIG.CLIENTES_COL_NOME).setValue(nome)
+  SpreadsheetApp.flush() // a validação da Vendas precisa enxergar o nome novo
+  return { nome: nome, nova: true, linha: livre }
 }
 
 /**

@@ -48,7 +48,13 @@ function lerRascunho(): { itens: ItemCarrinho[]; nome: string } {
   return { itens: [], nome: '' }
 }
 
-export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
+export default function TelaVenda({
+  catalogo,
+  onClienteNova,
+}: {
+  catalogo: Catalogo
+  onClienteNova?: (nome: string) => void
+}) {
   const [rascunho] = useState(lerRascunho)
 
   // carrinho
@@ -112,21 +118,27 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
   const pecas = itens.reduce((s, it) => s + it.quantidade, 0)
   const total = itens.reduce((s, it) => s + (totalItem(it) ?? 0), 0)
   const semPreco = itens.some((it) => totalItem(it) == null)
+  // rascunho antigo pode ter item digitado à mão; a planilha não aceita
+  const foraDoCatalogo = itens.some((it) => it.linhaCatalogo == null)
+
+  // A coluna Nome da Vendas só aceita clientes do "Cadastro de Clientes".
+  // Se o nome não está lá, o servidor cadastra antes de gravar a venda.
+  const clienteDaLista = useMemo(() => {
+    const n = nome.trim().toLowerCase()
+    return n ? (catalogo.clientes.find((c) => c.trim().toLowerCase() === n) ?? null) : null
+  }, [nome, catalogo])
+  const clienteNova = nome.trim() !== '' && clienteDaLista == null
 
   // ---------- carrinho ----------
 
-  function adicionarAoCarrinho(desc: string, precoUnit: string, linha: number | null) {
-    // Do catálogo: texto EXATO (até espaço no fim), porque a fórmula de Saídas do
-    // Estoque casa a venda pela Descrição. Digitado à mão: pode aparar.
-    const d = linha != null ? desc : desc.trim()
+  function adicionarAoCarrinho(desc: string, precoUnit: string, linha: number) {
+    // Texto EXATO do catálogo (até espaço no fim): a coluna Descrição da Vendas
+    // só aceita itens do catálogo, e a fórmula de Saídas casa por esse texto.
+    const d = desc
     if (!d.trim()) return
     setItens((atual) => {
       // mesmo produto de novo → só soma a quantidade
-      const i = atual.findIndex((it) =>
-        linha != null
-          ? it.linhaCatalogo === linha
-          : it.linhaCatalogo == null && it.descricao.toLowerCase() === d.toLowerCase(),
-      )
+      const i = atual.findIndex((it) => it.linhaCatalogo === linha)
       if (i >= 0) {
         const copia = [...atual]
         copia[i] = { ...copia[i], quantidade: copia[i].quantidade + 1 }
@@ -194,12 +206,8 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
     if (achado?.venda != null) setPreco(paraCampo(achado.venda))
   }
 
-  function aoAdicionarManual() {
-    if (produtoSel) {
-      adicionarAoCarrinho(produtoSel.descricao, preco, produtoSel.linha)
-    } else {
-      adicionarAoCarrinho(descricao, preco, null)
-    }
+  function aoAdicionarBuscado() {
+    if (produtoSel) adicionarAoCarrinho(produtoSel.descricao, preco, produtoSel.linha)
   }
 
   function aoDetectar(code: string) {
@@ -220,7 +228,12 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
   // ---------- registrar ----------
 
   const podeRegistrar =
-    itens.length > 0 && !semPreco && nome.trim() !== '' && !salvando && !servidorDesatualizado
+    itens.length > 0 &&
+    !semPreco &&
+    !foraDoCatalogo &&
+    nome.trim() !== '' &&
+    !salvando &&
+    !servidorDesatualizado
 
   async function aoRegistrar() {
     setErro(null)
@@ -228,11 +241,12 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
     if (!itens.length) return setErro('O carrinho está vazio.')
     if (nome.trim() === '') return setErro('Preencha o nome da cliente.')
     if (semPreco) return setErro('Tem item sem preço no carrinho.')
+    if (foraDoCatalogo) return setErro('Tire do carrinho o item que não está no catálogo.')
     setSalvando(true)
     try {
       const venda: Venda = {
         data,
-        nome: nome.trim(),
+        nome: clienteDaLista ?? nome.trim(), // nome exato da lista, quando já existe
         forma,
         conta,
         status: 'Efetuado',
@@ -243,9 +257,11 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
           linhaCatalogo: it.linhaCatalogo,
         })),
       }
-      await salvarVenda(venda)
+      const r = await salvarVenda(venda)
+      if (r.clienteNova && r.cliente) onClienteNova?.(r.cliente)
       setSucesso(
-        `Venda registrada! ${pecas} ${pecas === 1 ? 'peça' : 'peças'} · ${formatBRL(total)} ✨`,
+        `Venda registrada! ${pecas} ${pecas === 1 ? 'peça' : 'peças'} · ${formatBRL(total)} ✨` +
+          (r.clienteNova ? ` ${r.cliente} foi cadastrada como cliente.` : ''),
       )
       setItens([])
       setNome('')
@@ -317,7 +333,7 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
           )}
           {codigo !== '' && porCodigo.length === 0 && (
             <p className="mt-1 text-xs text-tawny">
-              Código não está no catálogo — digite o produto abaixo.
+              Código não está no catálogo — cadastre o produto na aba Cadastrar primeiro.
             </p>
           )}
         </div>
@@ -332,7 +348,7 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
             value={descricao}
             onChange={(e) => aoMudarDescricao(e.target.value)}
             list="lista-produtos-venda"
-            placeholder="buscar ou digitar"
+            placeholder="buscar pelo nome"
             autoCapitalize="words"
           />
           <datalist id="lista-produtos-venda">
@@ -342,12 +358,12 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
           </datalist>
           {descricao.trim() !== '' && !produtoSel && (
             <p className="mt-1 text-xs text-tawny">
-              Fora do catálogo — entra na venda, mas sem baixa no estoque.
+              Não está no catálogo — escolha um da lista ou cadastre na aba Cadastrar.
             </p>
           )}
         </div>
 
-        {descricao.trim() !== '' && (
+        {produtoSel && (
           <div className="flex items-end gap-3">
             <div className="flex-1">
               <label className="rotulo" htmlFor="venda-preco">
@@ -364,7 +380,7 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
             </div>
             <button
               type="button"
-              onClick={aoAdicionarManual}
+              onClick={aoAdicionarBuscado}
               className="btn-secundario shrink-0 px-5"
             >
               ＋ Adicionar
@@ -405,7 +421,7 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
                     <div>
                       <p className="font-medium text-grafite">{it.descricao}</p>
                       {it.linhaCatalogo == null && (
-                        <p className="text-xs text-tawny">sem baixa no estoque</p>
+                        <p className="text-xs text-tawny">fora do catálogo — remova</p>
                       )}
                     </div>
                     <button
@@ -493,6 +509,11 @@ export default function TelaVenda({ catalogo }: { catalogo: Catalogo }) {
               <option key={c} value={c} />
             ))}
           </datalist>
+          {clienteNova && (
+            <p className="mt-1 text-xs text-tawny">
+              Cliente nova — vai ser cadastrada no Cadastro de Clientes junto com a venda.
+            </p>
+          )}
         </div>
 
         <div className="grid grid-cols-2 gap-3">

@@ -116,7 +116,13 @@ export async function salvarProdutos(
  */
 export async function salvarVenda(
   venda: Venda,
-): Promise<{ ok: boolean; primeiraLinha?: number; linhas?: number }> {
+): Promise<{
+  ok: boolean
+  primeiraLinha?: number
+  linhas?: number
+  cliente?: string
+  clienteNova?: boolean
+}> {
   garantirConfig()
   const resp = await fetch(APPS_SCRIPT_URL, {
     method: 'POST',
@@ -128,6 +134,8 @@ export async function salvarVenda(
     ok?: boolean
     primeiraLinha?: number
     linhas?: number
+    cliente?: string
+    clienteNova?: boolean
     erro?: string
   }
   if (!data.ok) {
@@ -137,5 +145,11 @@ export async function salvarVenda(
     }
     throw new Error(data.erro ?? 'Não foi possível registrar a venda.')
   }
-  return { ok: true, primeiraLinha: data.primeiraLinha, linhas: data.linhas }
+  return {
+    ok: true,
+    primeiraLinha: data.primeiraLinha,
+    linhas: data.linhas,
+    cliente: data.cliente,
+    clienteNova: data.clienteNova,
+  }
 }

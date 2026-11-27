@@ -222,7 +222,16 @@ export default function App() {
         </button>
       </div>
 
-      {aba === 'vender' && <TelaVenda catalogo={catalogo} />}
+      {aba === 'vender' && (
+        <TelaVenda
+          catalogo={catalogo}
+          onClienteNova={(nome) =>
+            setCatalogo((c) =>
+              c.clientes.includes(nome) ? c : { ...c, clientes: [...c.clientes, nome] },
+            )
+          }
+        />
+      )}
 
       {aba === 'cadastrar' && (
         <>
